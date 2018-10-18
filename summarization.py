@@ -143,7 +143,7 @@ def traindata():
 		labelData.extend(tlabelData)		
 		articleSummary = data[2]
 		entityMapping = data[3]	
-		break
+		
 	featuretitleFreq,featuretfidfFreq,labelFreq = calcFeatureFreq(sentFeature,labelData)
 	featureProb = naiveBayesClassifier(sentFeature,featuretitleFreq,featuretfidfFreq,labelFreq,totalSentences)
 	return featureProb
