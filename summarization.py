@@ -3,7 +3,7 @@ import re
 from Stemmer import Stemmer
 from nltk.corpus import stopwords
 from collections import defaultdict
-import math,heapq
+import math
 
 #feature tfidf, word in title
 def calcTFIDF(vocabWordFreq,totalSentences,sentLabel):
