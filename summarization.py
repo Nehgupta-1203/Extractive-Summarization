@@ -3,8 +3,8 @@ import re
 from Stemmer import Stemmer
 from nltk.corpus import stopwords
 from collections import defaultdict
-import math
-
+import math,heapq
+sentFeature = defaultdict(lambda: defaultdict(lambda: int))
 #feature tfidf, word in title
 def calcTFIDF(vocabWordFreq,totalSentences,sentLabel):
 	sentScores = {}	
@@ -42,29 +42,17 @@ def dataPreprocessing(sentence):
 	stemmedData = stemming(filteredData)
 	return stemmedData
 
-def calcFeatureFreq(sentFeature,labelData):
-	featuretfidfFreq = defaultdict(int)
-	featuretitleFreq = defaultdict(int)
-	labelFreq = defaultdict(int)
-
-	for feature in sentFeature:
-		featuretfidfFreq[feature[0]] += 1
-		featuretitleFreq[feature[1]] += 1
-	for label in labelData:
-		labelFreq[label] += 1
-	return featuretitleFreq,featuretfidfFreq,labelFreq
-
 
 def extractFeature(sentTFIDF,istitle,sentLabel):
-	sentFeature = []
-	labelData = []	
+	global sentFeature
 	for sentId,scores in sentTFIDF.items():
-		avgTFIDF = scores[0]/float(scores[1])
+		avgTFIDF = math.floor(scores[0]/float(scores[1]))
 		freqTitle = istitle[sentId]
 		sLabel = sentLabel[sentId][1]
-		sentFeature.append([math.floor(avgTFIDF),freqTitle])
-		labelData.append(sLabel)
-	return sentFeature,labelData
+		sentFeature[sLabel][avgTFIDF] += 1
+		sentFeature[sLabel][freqTitle] += 1 
+	
+	return sentFeature
 
 def createVocab(stemmedData,vocabWordFreq,sentId):
 	for word in stemmedData:
@@ -99,28 +87,32 @@ def splitSentLabel(data,title):
 	return vocabWordFreq,istitle,totalSentences,sentLabel
 
 
-def naiveBayesClassifier(sentFeature,featuretitleFreq,featuretfidfFreq,labelFreq,totalSentences):
-	featureProb = {}
+def calcFeatureProb(totalSentences):
+	featureProb = defaultdict(lambda: defaultdict(lambda: int))
 
 	probLabel0 = labelFreq[0]/totalSentences
 	probLabel1 = labelFreq[1]/totalSentences
 	probLabel2 = labelFreq[2]/totalSentences
+	#data:=tfidf,title
+	for sLabel,data in sentFeature.items():
+		noOfentry =  len(data)/2
+		for d,freq in data.items():			
+			featureProb[sLabel][d] = freq/float(noOfentry)
 
-	for index in range(len(sentFeature)):
-		tfidf = sentFeature[index][0]
-		title = sentFeature[index][1]
-		probLabel0 *= (featuretfidfFreq[tfidf]/float(labelFreq[0]))*((1+featuretitleFreq[title])/float(labelFreq[0]))
-		probLabel1 *= (featuretfidfFreq[tfidf]/float(labelFreq[1]))*((1+featuretitleFreq[title])/float(labelFreq[1]))
-		probLabel2 *= (featuretfidfFreq[tfidf]/float(labelFreq[2]))*((1+featuretitleFreq[title])/float(labelFreq[2]))
-		outstr = str(tfidf)+"_"+str(title)
-		featureProb[outstr] = max(probLabel0,probLabel1,probLabel2)
+	return featureProb,probLabel0,probLabel1,probLabel2
 
-	return featureProb
+def naiveBayesClassifier(featureProb,probLabel0,probLabel1,probLabel2):
+	predictedProb = {}
+	for sentId,data in sentFeature.items():
+		prob0 = probLabel0 * featureProb[0][data[0]] * featureProb[0][data[1]]
+		prob1 = probLabel1 * featureProb[1][data[0]] * featureProb[1][data[1]]
+		prob2 = probLabel2 * featureProb[2][data[0]] * featureProb[2][data[1]]
+		predictedProb[sentId] = max(prob0,prob1,prob2)
+	return predictedProb
+
 
 def traindata():
 	path = "summarizationdataset/dailymail/training/"
-	sentFeature = []
-	labelData = []
 	totalSentences = 0
 	for articleName in listdir(path):
 		filename = path + articleName
@@ -138,20 +130,19 @@ def traindata():
 		vocabWordFreq,istitle,ttotalSentences,sentLabel = splitSentLabel(articleData,title)
 		totalSentences += ttotalSentences
 		sentTFIDF = calcTFIDF(vocabWordFreq,totalSentences,sentLabel)
-		tsentFeature,tlabelData = extractFeature(sentTFIDF,istitle,sentLabel)
-		sentFeature.extend(tsentFeature)
-		labelData.extend(tlabelData)		
+		extractFeature(sentTFIDF,istitle,sentLabel)			
 		articleSummary = data[2]
 		entityMapping = data[3]	
 		
-	featuretitleFreq,featuretfidfFreq,labelFreq = calcFeatureFreq(sentFeature,labelData)
-	featureProb = naiveBayesClassifier(sentFeature,featuretitleFreq,featuretfidfFreq,labelFreq,totalSentences)
+	
+	featureProb = calcFeatureProb(totalSentences)
 	return featureProb
 
 
 
 def main():
-	featureProb = traindata()	
+	featureProb = traindata()
+		
 	
 	
 
