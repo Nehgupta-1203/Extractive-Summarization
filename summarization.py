@@ -4,23 +4,8 @@ from Stemmer import Stemmer
 from nltk.corpus import stopwords
 from collections import defaultdict
 import math,heapq
-sentFeature = defaultdict(lambda: defaultdict(lambda: int))
-#feature tfidf, word in title
-def calcTFIDF(vocabWordFreq,totalSentences,sentLabel):
-	sentScores = {}	
-	for word,data in vocabWordFreq.items():
-		idf = 1 + math.log(totalSentences/float(len(data)))
-		for sentId,freq in data.items():
-			docLen = sentLabel[sentId][0]
-			tf = 1 + math.log(freq/float(docLen))
-			tf_idf = tf*idf
-			if sentId not in sentScores:
-				sentScores[sentId] = [tf_idf,1]
-			else:
-				sentScores[sentId][0] += tf_idf
-				sentScores[sentId][1] += 1
-
-	return sentScores
+import numpy as np
+##features used tfidf,title,uppercasewords,sentpos,sentlen
 
 def stemming(data): 
 	stemmer=Stemmer("english")
@@ -42,16 +27,28 @@ def dataPreprocessing(sentence):
 	stemmedData = stemming(filteredData)
 	return stemmedData
 
-def extractFeature(sentTFIDF,istitle,sentLabel):
-	global sentFeature
-	for sentId,scores in sentTFIDF.items():
-		avgTFIDF = math.floor(scores[0]/float(scores[1]))
-		freqTitle = istitle[sentId]
-		sLabel = sentLabel[sentId][1]
-		sentFeature[sLabel][avgTFIDF] += 1
-		sentFeature[sLabel][freqTitle] += 1 
+def mapEntity(sentence,entityMapping):
+	modSentence = ""
+	countUppercase = 0
+	words = re.split(r'\s',sentence)
+	for word in words:
+		if word.islower()==False:
+			countUppercase += 1
+		if word in entityMapping:
+			modSentence += entityMapping[word] + " "
+		else:
+			modSentence += word + " "
+	return modSentence,countUppercase
+
+def entityMap(i,entityMapping):
+	entityMap = {}
+	allentity = entityMapping.split("\n")
 	
-	return sentFeature
+	for entity in allentity:
+		if len(entity) > 0 and ":" in entity :
+			entity = re.split(r':',entity)
+			entityMap[entity[0]] = entity[1]
+	return entityMap
 
 def createVocab(stemmedData,vocabWordFreq,sentId):
 	for word in stemmedData:
@@ -60,130 +57,142 @@ def createVocab(stemmedData,vocabWordFreq,sentId):
 		elif sentId not in vocabWordFreq[word]:
 			vocabWordFreq[word][sentId] = 1
 		else:
-			vocabWordFreq[word][sentId] += 1
-	return vocabWordFreq
+			vocabWordFreq[word][sentId] += 1	
 
-def splitSentLabel(data,title):
-	sentLabel = {}
+
+def splitSentLabel(data,title,entityMapping):
+	sentData = {}
 	vocabWordFreq = {}
 	allSentences = re.split(r'\n',data)
-	totalSentences = len(allSentences)
 	sentId = 0
 	istitle= {}
-	for data in allSentences:
-		if len(data) > 0:			
+	totalSentences = len(allSentences)
+	title = dataPreprocessing(title)
+	for index,data in enumerate(allSentences):
+		if len(data) > 0 :			
 			splitData = re.split(r'\t\t\t',data)
-			sentLen = len(splitData[0])
-			sentence = ("".join(splitData[0])).lower().strip()
-			stemmedData = dataPreprocessing(sentence)
-			vocabWordFreq = {**createVocab(stemmedData,vocabWordFreq,sentId),**vocabWordFreq}
-			sentLabel[sentId] = [sentLen,int(splitData[1])]
+			sentence = ("".join(splitData[0])).strip()
+			sentence,countUppercase = mapEntity(sentence,entityMapping)
+			stemmedData = dataPreprocessing(sentence.lower())
+			createVocab(stemmedData,vocabWordFreq,sentId)
+			if index < int(totalSentences*0.2) or (totalSentences-index) < int(totalSentences*0.2):
+				sentPos = 1
+			else:
+				sentPos = 0
+			sentData[sentId] = [len(sentence),int(splitData[1]),countUppercase,sentPos]
 			istitle[sentId] = 0
 			for data in stemmedData:
 				if data in title:
 					istitle[sentId] += 1
 			sentId += 1
-	return vocabWordFreq,istitle,totalSentences,sentLabel
+	return vocabWordFreq,istitle,sentData,totalSentences
 
+def calcTFIDF(vocabWordFreq,totalSentences):
+	sentScores = {}	
+	for word,data in vocabWordFreq.items():
+		idf =  math.log(totalSentences/float(len(data)))
+		for sentId,freq in data.items():
+			tf = 1 + math.log(freq)
+			tf_idf = tf*idf
+			if sentId not in sentScores:
+				sentScores[sentId] = [tf_idf,1]
+			else:
+				sentScores[sentId][0] += tf_idf
+				sentScores[sentId][1] += 1
 
-def calcFeatureProb(totalSentences):
-	featureProb = defaultdict(lambda: defaultdict(lambda: int))
-	probLabel0 = labelFreq[0]/totalSentences
-	probLabel1 = labelFreq[1]/totalSentences
-	probLabel2 = labelFreq[2]/totalSentences
-	#data:=tfidf,title
-	for sLabel,data in sentFeature.items():
-		noOfentry =  len(data)/2
-		for d,freq in data.items():			
-			featureProb[sLabel][d] = freq/float(noOfentry)
+	return sentScores
 
-	return featureProb,probLabel0,probLabel1,probLabel2
-
-def traindata():
-	path = "summarizationdataset/dailymail/training/"
-	totalSentences = 0
-	for articleName in listdir(path):
-		filename = path + articleName
-		file = open(filename,encoding='utf-8')
-		data = file.read()
-		file.close()
-		data = re.split(r'\n\n',data)
-		articleTitle = str(data[0]).split("/")[-1]
-		articleTitle = articleTitle.split("-")
-		articleTitle[-1] = articleTitle[-1].split(".")[0]
-		title = defaultdict(int)
-		for t in articleTitle:
-			title[t] = 1
-		articleData = data[1]
-		vocabWordFreq,istitle,ttotalSentences,sentLabel = splitSentLabel(articleData,title)
-		totalSentences += ttotalSentences
-		sentTFIDF = calcTFIDF(vocabWordFreq,totalSentences,sentLabel)
-		extractFeature(sentTFIDF,istitle,sentLabel)			
-		articleSummary = data[2]
-		entityMapping = data[3]
-	featureProb,probLabel0,probLabel1,probLabel2 = calcFeatureProb(totalSentences)
-	return featureProb,probLabel0,probLabel1,probLabel2
-
-
-accuracy = 0
-def checkAccuracy(predictedLabel,sentLabel,totalSentences):
-	global accuracy
-	count = 0
-	for sentId,label in predictedLabel.items():
-		if label == sentLabel[sentId]:
-			count += 1
-
-	accuracy += count/float(totalSentences)
-
-
-def naiveBayesClassifier(testSentFeature,featureProb,probLabel0,probLabel1,probLabel2):
-	predictedProb = {}
-	for sentId,data in testSentFeature.items():
-		for d in data:
-			probLabel0 =* featureProb[0][d[0]] * featureProb[0][d[1]]
-			probLabel1 =* featureProb[1][d[0]] * featureProb[1][d[1]]
-			probLabel2 =* featureProb[2][d[0]] * featureProb[2][d[1]]
-		predictedProb[sentId] = max(probLabel0,probLabel1,probLabel2)
-	return predictedProb
-
-def extractTestFeature(sentTFIDF,istitle):
-	sentFeature = defaultdict(lambda: list())
+def extractFeature(sentTFIDF,istitle,sentData,inputFeature,target):
 	for sentId,scores in sentTFIDF.items():
 		avgTFIDF = math.floor(scores[0]/float(scores[1]))
 		freqTitle = istitle[sentId]
-		sentFeature[sentId].append([avgTFIDF,freqTitle])		
-	return sentFeature
+		sLabel = sentData[sentId][1]
+		sentLen = sentData[sentId][0]
+		countUppercase = sentData[sentId][2]
+		sentPos = sentData[sentId][3]
+		if sentLen > 3 and sentLen < 15:
+			sLen = 1
+		else:
+			sLen = 0
 
-def testdata():
-	path = "summarizationdataset/dailymail/testing/"
-	totalSentences = 0
-	for articleName in listdir(path):
+		inputFeature.append([avgTFIDF,freqTitle,sLen,countUppercase,sentPos])
+		target.append(sLabel)
+
+def evaluate(weights,testdata,actualLabel):
+    actualLabel = np.array(actualLabel)
+    scores = np.dot(testdata, weights.T)
+    scores = np.round(sigmoid(scores))
+    predictions = scores.argmax(axis=1)
+    print ('Accuracy: {0}'.format((predictions == actualLabel).sum()/float(len(predictions))))
+
+def costFunction(features, target, weights):
+    cost = np.array([],dtype=np.float128)
+    scores = np.array([],dtype=np.float128)
+    scores = np.dot(features, weights)
+    cost = np.sum(-( target*scores - np.log(1 + np.exp(scores))))
+    return cost
+
+def sigmoid(scores):
+    return 1/(1 + np.exp(-scores))
+
+def Logistic(inputFeature,target,num_epochs,learning_rate):
+    weights = np.zeros(inputFeature.shape[1],dtype=np.float128)
+    for epoch in range(num_epochs):
+        scores = np.dot(inputFeature,weights)
+        predictions = sigmoid(scores)
+        output_error = target - predictions
+        gradient = np.dot(inputFeature.T,output_error)
+        weights += (learning_rate * gradient)
+        if epoch % 10 == 0:
+            cost = costFunction(inputFeature, target, weights)
+            print("costFunction: ",cost)
+            
+    return weights
+
+def Multi_Logistic(inputFeature,target,num_epochs,learning_rate):
+    target = np.array(target)
+    inputFeature = np.array(inputFeature)
+    num_classes = 3
+    num_feature = inputFeature.shape[1]
+    computedClassifier = np.zeros(shape=(num_classes,num_feature),dtype=np.float128)
+    for curClass in range(0,num_classes):
+        print("Training for label: ",curClass)
+        targetLabel =  (target==curClass).astype(int)
+        computedClassifier[curClass,:] = Logistic(inputFeature,targetLabel,num_epochs,learning_rate)
+    return computedClassifier
+
+def readdata(path):		
+	inputFeature = []
+	target = []
+	for articleName in listdir(path):	
 		filename = path + articleName
-		file = open(filename,encoding='utf-8')
+		file = open(filename,"r",encoding='utf8',errors='ignore')
 		data = file.read()
 		file.close()
 		data = re.split(r'\n\n',data)
 		articleTitle = str(data[0]).split("/")[-1]
 		articleTitle = articleTitle.split("-")
 		articleTitle[-1] = articleTitle[-1].split(".")[0]
-		title = defaultdict(int)
-		for t in articleTitle:
-			title[t] = 1
-		articleData = data[1]
+		articleTitle = (" ".join(articleTitle))
+		articleData = data[1]	
 		articleSummary = data[2]
-		entityMapping = data[3]	
-		
-		vocabWordFreq,istitle,totalSentences,sentLabel = splitSentLabel(articleData,title)
-		totalSentences += ttotalSentences
-		sentTFIDF = calcTFIDF(vocabWordFreq,totalSentences,sentLabel)
-		testSentFeature = extractTestFeature(sentTFIDF,istitle)	
-		predictedProbLabel = naiveBayesClassifier(testSentFeature,featureProb,probLabel0,probLabel1,probLabel2)
-		checkAccuracy(predictedLabel,sentLabel,totalSentences)
+		entityMapping = entityMap(i,data[3])
+		vocabWordFreq,istitle,sentData,totalSentences = splitSentLabel(articleData,articleTitle,entityMapping)
+		sentTFIDF = calcTFIDF(vocabWordFreq,totalSentences)
+		extractFeature(sentTFIDF,istitle,sentData,inputFeature,target)
+	return inputFeature,target
 
 def main():
-	featureProb,probLabel0,probLabel1,probLabel2 = traindata()
-	testdata(featureProb,probLabel0,probLabel1,probLabel2)
-	print("Accuracy of Model: ", accuracy)
+	num_epochs = 100
+	learning_rate = 0.1
+	print("training")
+	trainPath = "summarizationdataset/dailymail/training/"
+	testPath = "summarizationdataset/dailymail/test/"
+	inputFeature,target = readdata(trainPath)
+	classifierWeights = Multi_Logistic(inputFeature,target,num_epochs,learning_rate)
+	print("testing")
+	testFeature,target = readdata(testPath)
+	evaluate(classifierWeights,testFeature,target)
 	
 
 if __name__=="__main__":
